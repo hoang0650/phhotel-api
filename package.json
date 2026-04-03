@@ -1,0 +1,13 @@
+{
+  "name": "phhotel-api",
+  "version": "1.0.0",
+  "private": true,
+    "scripts": {
+    "start": "cd backend && node ./bin/www",
+    "install": "cd backend && npm install --production=false"
+  },
+  "engines": {
+    "node": "18.x"
+  }
+}
+

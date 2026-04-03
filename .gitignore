@@ -1,0 +1,53 @@
+# backend
+phhotel-api/backend/node_modules/
+phhotel-api/backend/node_modules/package-lock.json
+phhotel-api/node_modules/
+phhotel-api/.vscode/
+phhotel-api/.angular/
+phhotel-api/package-lock.json
+phhotel-api/backend/.env
+
+# phhotel-api
+# Compiled output
+phhotel-api/dist
+phhotel-api/tmp
+phhotel-api/out-tsc
+phhotel-api/bazel-out
+
+# Node
+phhotel-api/node_modules
+phhotel-api/npm-debug.log
+phhotel-api/yarn-error.log
+
+# IDEs and editors
+phhotel-api/.idea/
+phhotel-api/.project
+phhotel-api/.classpath
+phhotel-api/.c9/
+phhotel-api/*.launch
+phhotel-api/.settings/
+phhotel-api/*.sublime-workspace
+
+# Visual Studio Code
+phhotel-api/.vscode/*
+phhotel-api/!.vscode/settings.json  
+phhotel-api/!.vscode/tasks.json
+phhotel-api/!.vscode/launch.json
+phhotel-api/!.vscode/extensions.json
+phhotel-api/.history/*
+
+# Miscellaneous
+phhotel-api/.angular/cache
+phhotel-api/.sass-cache/
+phhotel-api/connect.lock
+phhotel-api/coverage
+phhotel-api/libpeerconnection.log
+phhotel-api/testem.log
+phhotel-api/typings
+
+# System files
+phhotel-api/.DS_Store
+phhotel-api/Thumbs.db
+
+# Local Netlify folder
+phhotel-api/.netlify
