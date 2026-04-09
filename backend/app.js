@@ -93,6 +93,8 @@ app.use(cors({
       'http://localhost:8081',
       'http://localhost:19006',
       'https://phhotel.vercel.app',
+      'https://www.phhotel.vn',
+      'https://phhotel.vn',
       'https://rork.com',
       'https://rork.com/p/rcmgljhz0n5okje2wjh3n',
       'https://flutlab.io',
