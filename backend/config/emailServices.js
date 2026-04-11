@@ -81,7 +81,7 @@ const sendForgotPasswordEmail = async (toEmail, token, emailFrom = null) => {
   if (skipEmail) {
     console.log('⚠️  SKIP_EMAIL is enabled - Email sẽ không được gửi');
     console.log('📧 Reset password email would be sent to:', toEmail);
-    console.log('📤 Email from:', process.env.EMAIL_FROM || process.env.EMAIL_USER || 'noreply@phgrouptechs.com');
+    console.log('📤 Email from:', process.env.EMAIL_FROM || process.env.EMAIL_USER || 'noreply@phhotel.vn');
     console.log('🔗 Reset URL:', resetUrl);
     console.log('🔑 Reset Token:', token);
     // Trả về success giả để không break flow
