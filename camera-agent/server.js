@@ -7,6 +7,7 @@ const PORT = Number(process.env.PORT || 8787);
 
 const app = express();
 app.use(cors());
+app.use(express.json({ limit: '2mb' }));
 
 function isAuthorized(req) {
   if (!AGENT_TOKEN) return true;
@@ -23,6 +24,19 @@ app.get('/snapshot', (req, res) => {
   }
 
   const rtspUrl = String(req.query.rtspUrl || '');
+  return handleSnapshot(rtspUrl, res);
+});
+
+app.post('/snapshot', (req, res) => {
+  if (!isAuthorized(req)) {
+    return res.status(401).json({ message: 'Unauthorized' });
+  }
+
+  const rtspUrl = String(req.body?.rtspUrl || '');
+  return handleSnapshot(rtspUrl, res);
+});
+
+function handleSnapshot(rtspUrl, res) {
   if (!rtspUrl) {
     return res.status(400).json({ message: 'Missing rtspUrl' });
   }
@@ -64,9 +78,8 @@ app.get('/snapshot', (req, res) => {
     res.setHeader('Cache-Control', 'no-store');
     return res.status(200).send(img);
   });
-});
+}
 
 app.listen(PORT, () => {
   console.log(`camera-agent listening on :${PORT}`);
 });
-

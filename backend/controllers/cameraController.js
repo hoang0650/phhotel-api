@@ -120,12 +120,12 @@ exports.getCameraSnapshot = async (req, res) => {
             return res.status(404).json({ message: 'Không tìm thấy camera' });
         }
 
-        if (isPrivateIpv4(camera.ipAddress) && process.env.NODE_ENV === 'production') {
-            const canUseAgent = camera.accessMode === 'agent' && camera.agentBaseUrl;
-            if (!canUseAgent) {
+        const shouldUseAgent = camera.accessMode === 'agent';
+        if (shouldUseAgent) {
+            if (!camera.agentBaseUrl) {
                 return res.status(400).json({
-                    message: 'Không thể lấy snapshot: camera đang dùng IP nội bộ (LAN) nên server cloud không truy cập được.',
-                    hint: 'Chọn chế độ Agent (On-Prem) và cấu hình agentBaseUrl để backend proxy snapshot qua agent trong LAN.',
+                    message: 'Chưa cấu hình agentBaseUrl cho camera.',
+                    hint: 'Nhập agentBaseUrl (VD: https://agent.phgrouptechs.com) và thử lại.',
                     ipAddress: camera.ipAddress,
                     rtspPath: camera.rtspPath || null
                 });
@@ -138,8 +138,7 @@ exports.getCameraSnapshot = async (req, res) => {
                     headers['x-agent-token'] = camera.agentToken;
                 }
                 const agentUrl = String(camera.agentBaseUrl).replace(/\/+$/, '');
-                const resp = await axios.get(`${agentUrl}/snapshot`, {
-                    params: { rtspUrl },
+                const resp = await axios.post(`${agentUrl}/snapshot`, { rtspUrl }, {
                     headers,
                     responseType: 'arraybuffer',
                     timeout: 10000
@@ -149,15 +148,29 @@ exports.getCameraSnapshot = async (req, res) => {
                 return res.status(200).send(Buffer.from(resp.data));
             } catch (e) {
                 const msg = e?.response?.data?.message || e?.message || 'Agent snapshot failed';
+                const details = e?.response?.data?.details || null;
                 return res.status(500).json({
                     message: 'Lấy snapshot qua agent thất bại.',
                     hint: 'Kiểm tra agent đang chạy/đúng URL, token, và agent có truy cập được RTSP trong LAN.',
                     error: String(msg),
+                    details: details ? String(details).slice(-1200) : null,
                     agentBaseUrl: camera.agentBaseUrl || null,
                     ipAddress: camera.ipAddress,
-                    rtspPath: camera.rtspPath || null
+                    port: camera.port || 554,
+                    rtspPath: camera.rtspPath || null,
+                    rtsp: maskRtspUrl(rtspUrl)
                 });
             }
+        }
+
+        if (isPrivateIpv4(camera.ipAddress) && process.env.NODE_ENV === 'production') {
+            return res.status(400).json({
+                message: 'Không thể lấy snapshot: camera đang dùng IP nội bộ (LAN) nên server cloud không truy cập được.',
+                hint: 'Chọn chế độ Agent (On-Prem) và cấu hình agentBaseUrl để backend proxy snapshot qua agent trong LAN.',
+                ipAddress: camera.ipAddress,
+                port: camera.port || 554,
+                rtspPath: camera.rtspPath || null
+            });
         }
 
         const rtspUrl = buildRtspUrl(camera);
