@@ -1,7 +1,305 @@
 const { Guest } = require('../models/guests');
 const { Hotel } = require('../models/hotel');
 const { Room } = require('../models/rooms');
+const RoomEvent = require('../models/roomEvent');
 const mongoose = require('mongoose');
+const { getCache, setCache, generateCacheKey } = require('../config/cacheHelper');
+
+const AI_LABEL_TTL = 60;
+const AI_STATS_TTL = 5 * 60;
+
+function isAiAuthorized(req) {
+  const required = process.env.AI_INTERNAL_TOKEN;
+  if (!required) return true;
+  const token = req.headers['x-ai-token'];
+  return token && token === required;
+}
+
+async function computeGuestLabel({ hotelId, guestId, idNumber }) {
+  if (!hotelId) return null;
+
+  let guest = null;
+  if (guestId && mongoose.Types.ObjectId.isValid(guestId)) {
+    guest = await Guest.findById(guestId).lean();
+  } else if (idNumber) {
+    guest = await Guest.findOne({ hotelId, 'personalInfo.idNumber': idNumber }).lean();
+  }
+  if (!guest) return null;
+
+  const resolvedIdNumber = guest?.personalInfo?.idNumber || idNumber || '';
+  const isReturning = guest.guestType === 'frequent' || (Array.isArray(guest.stayHistory) && guest.stayHistory.length > 0);
+
+  let currentStay = null;
+  if (resolvedIdNumber) {
+    const occupiedRoom = await Room.findOne({
+      hotelId,
+      status: 'occupied',
+      'currentBooking.guestInfo.idNumber': resolvedIdNumber
+    }).select('_id roomNumber').lean();
+
+    if (occupiedRoom) {
+      const lastCheckin = await RoomEvent.findOne({
+        hotelId,
+        roomId: occupiedRoom._id,
+        type: 'checkin',
+        'guestInfo.idNumber': resolvedIdNumber
+      }).sort({ createdAt: -1 }).lean();
+
+      const checkinAt = lastCheckin?.checkinTime || lastCheckin?.createdAt || null;
+      if (checkinAt) {
+        const startedAt = new Date(checkinAt);
+        const now = new Date();
+        const durationSeconds = Math.max(0, Math.floor((now.getTime() - startedAt.getTime()) / 1000));
+        currentStay = {
+          roomId: String(occupiedRoom._id),
+          roomNumber: occupiedRoom.roomNumber,
+          startedAt: startedAt.toISOString(),
+          durationSeconds
+        };
+      }
+    }
+  }
+
+  return {
+    guestId: String(guest._id),
+    hotelId: String(hotelId),
+    fullName: guest?.personalInfo?.fullName || '',
+    idNumber: resolvedIdNumber,
+    guestType: guest.guestType || 'regular',
+    isReturning,
+    loyaltyTier: guest.loyaltyTier || 'standard',
+    currentStay
+  };
+}
+
+exports.computeGuestLabel = computeGuestLabel;
+
+async function computeHotelGuestRoomStats(hotelId, period) {
+  const normalizedPeriod = String(period || 'day');
+  if (!['day', 'week', 'month'].includes(normalizedPeriod)) {
+    throw new Error('Invalid period');
+  }
+
+  const cacheKey = generateCacheKey('ai:stats', String(hotelId), normalizedPeriod);
+  const cached = await getCache(cacheKey);
+  if (cached) {
+    return cached;
+  }
+
+  const now = new Date();
+  const start = new Date(now);
+  if (normalizedPeriod === 'day') {
+    start.setDate(start.getDate() - 30);
+  } else if (normalizedPeriod === 'week') {
+    start.setDate(start.getDate() - 7 * 12);
+  } else {
+    start.setMonth(start.getMonth() - 12);
+  }
+
+  const events = await RoomEvent.find({
+    hotelId,
+    type: 'checkin',
+    createdAt: { $gte: start }
+  }).select('createdAt roomId guestInfo.idNumber').lean();
+
+  const idNumbers = Array.from(new Set(events.map(e => e?.guestInfo?.idNumber).filter(Boolean)));
+  let firstCheckins = [];
+  if (idNumbers.length > 0) {
+    firstCheckins = await RoomEvent.aggregate([
+      { $match: { hotelId: mongoose.Types.ObjectId.isValid(hotelId) ? new mongoose.Types.ObjectId(hotelId) : hotelId, type: 'checkin', 'guestInfo.idNumber': { $in: idNumbers } } },
+      { $group: { _id: '$guestInfo.idNumber', firstAt: { $min: '$createdAt' } } }
+    ]);
+  }
+  const firstMap = new Map(firstCheckins.map(x => [x._id, new Date(x.firstAt).getTime()]));
+
+  const buckets = new Map();
+  const toKey = (d) => {
+    const dt = new Date(d);
+    if (normalizedPeriod === 'day') {
+      return dt.toISOString().slice(0, 10);
+    }
+    if (normalizedPeriod === 'month') {
+      return `${dt.getUTCFullYear()}-${String(dt.getUTCMonth() + 1).padStart(2, '0')}`;
+    }
+    const date = new Date(Date.UTC(dt.getUTCFullYear(), dt.getUTCMonth(), dt.getUTCDate()));
+    const dayNum = date.getUTCDay() || 7;
+    date.setUTCDate(date.getUTCDate() + 4 - dayNum);
+    const yearStart = new Date(Date.UTC(date.getUTCFullYear(), 0, 1));
+    const weekNo = Math.ceil((((date - yearStart) / 86400000) + 1) / 7);
+    return `${date.getUTCFullYear()}-W${String(weekNo).padStart(2, '0')}`;
+  };
+
+  for (const ev of events) {
+    const key = toKey(ev.createdAt);
+    if (!buckets.has(key)) {
+      buckets.set(key, { period: key, totalStays: 0, roomsUsed: new Set(), uniqueGuests: new Set(), returningStays: 0, uniqueReturningGuests: new Set() });
+    }
+    const b = buckets.get(key);
+    b.totalStays += 1;
+    if (ev.roomId) b.roomsUsed.add(String(ev.roomId));
+    const idn = ev?.guestInfo?.idNumber;
+    if (idn) {
+      b.uniqueGuests.add(idn);
+      const firstAtMs = firstMap.get(idn);
+      const evMs = new Date(ev.createdAt).getTime();
+      if (firstAtMs !== undefined && firstAtMs < evMs) {
+        b.returningStays += 1;
+        b.uniqueReturningGuests.add(idn);
+      }
+    }
+  }
+
+  const points = Array.from(buckets.values())
+    .sort((a, b) => a.period.localeCompare(b.period))
+    .map(b => ({
+      period: b.period,
+      totalStays: b.totalStays,
+      roomsUsed: b.roomsUsed.size,
+      uniqueGuests: b.uniqueGuests.size,
+      returningStays: b.returningStays,
+      uniqueReturningGuests: b.uniqueReturningGuests.size
+    }));
+
+  const payload = { hotelId: String(hotelId), period: normalizedPeriod, from: start.toISOString(), to: now.toISOString(), points };
+  await setCache(cacheKey, payload, AI_STATS_TTL);
+  return payload;
+}
+
+exports.computeHotelGuestRoomStats = computeHotelGuestRoomStats;
+
+exports.matchFaceEncodingForAi = async (req, res) => {
+  try {
+    if (!isAiAuthorized(req)) {
+      return res.status(401).json({ message: 'Unauthorized' });
+    }
+
+    const { hotelId, encoding, threshold } = req.body || {};
+    if (!hotelId) {
+      return res.status(400).json({ message: 'Missing hotelId' });
+    }
+    if (!Array.isArray(encoding) || encoding.length === 0) {
+      return res.status(400).json({ message: 'Missing encoding' });
+    }
+
+    const tol = typeof threshold === 'number' ? threshold : 0.5;
+    const cacheKey = generateCacheKey('ai:face-db', String(hotelId));
+    let faceDb = await getCache(cacheKey);
+    if (!Array.isArray(faceDb)) {
+      const docs = await Guest.find({
+        hotelId,
+        'metadata.faceEncoding': { $type: 'array', $ne: [] }
+      }).select('_id metadata.faceEncoding').lean();
+      faceDb = docs.map(d => ({ guestId: String(d._id), encoding: d?.metadata?.faceEncoding || [] }));
+      await setCache(cacheKey, faceDb, AI_STATS_TTL);
+    }
+
+    let bestId = null;
+    let bestDistSq = Infinity;
+    for (const item of faceDb) {
+      const enc = item?.encoding;
+      if (!Array.isArray(enc) || enc.length !== encoding.length) continue;
+      let distSq = 0;
+      for (let i = 0; i < enc.length; i++) {
+        const a = Number(enc[i]);
+        const b = Number(encoding[i]);
+        if (Number.isNaN(a) || Number.isNaN(b)) {
+          distSq = Infinity;
+          break;
+        }
+        const diff = a - b;
+        distSq += diff * diff;
+      }
+      if (distSq < bestDistSq) {
+        bestDistSq = distSq;
+        bestId = item.guestId;
+      }
+    }
+
+    const bestDist = Number.isFinite(bestDistSq) ? Math.sqrt(bestDistSq) : null;
+    if (bestId && bestDist !== null && bestDist <= tol) {
+      return res.status(200).json({ found: true, guestId: bestId, distance: bestDist });
+    }
+    return res.status(200).json({ found: false });
+  } catch (error) {
+    console.error('Error matchFaceEncodingForAi:', error);
+    return res.status(500).json({ message: error.message });
+  }
+};
+
+exports.getHotelGuestRoomStatsForDashboard = async (req, res) => {
+  try {
+    const currentUser = req.user;
+    const { hotelId, period } = req.query;
+    if (!hotelId) {
+      return res.status(400).json({ message: 'Missing hotelId' });
+    }
+
+    if (currentUser?.role === 'business') {
+      if (!currentUser.businessId) {
+        return res.status(403).json({ message: 'Bạn không có quyền xem thống kê' });
+      }
+      const hotel = await Hotel.findById(hotelId).select('businessId').lean();
+      if (!hotel || String(hotel.businessId || '') !== String(currentUser.businessId || '')) {
+        return res.status(403).json({ message: 'Bạn không có quyền xem thống kê khách sạn này' });
+      }
+    } else if (currentUser?.role === 'hotel' || currentUser?.role === 'staff') {
+      if (String(currentUser.hotelId || '') !== String(hotelId || '')) {
+        return res.status(403).json({ message: 'Bạn không có quyền xem thống kê khách sạn này' });
+      }
+    }
+
+    const payload = await computeHotelGuestRoomStats(hotelId, period);
+    return res.status(200).json(payload);
+  } catch (error) {
+    console.error('Error getHotelGuestRoomStatsForDashboard:', error);
+    return res.status(500).json({ message: error.message });
+  }
+};
+
+exports.getGuestLabelForAi = async (req, res) => {
+  try {
+    if (!isAiAuthorized(req)) {
+      return res.status(401).json({ message: 'Unauthorized' });
+    }
+
+    const { hotelId, guestId, idNumber } = req.query;
+    if (!hotelId) {
+      return res.status(400).json({ message: 'Missing hotelId' });
+    }
+
+    const cacheKey = generateCacheKey('ai:guest-label', String(hotelId), String(guestId || ''), String(idNumber || ''));
+    const cached = await getCache(cacheKey);
+    if (cached) {
+      return res.status(200).json(cached);
+    }
+
+    const label = await computeGuestLabel({ hotelId, guestId, idNumber });
+    const payload = { found: !!label, label };
+    await setCache(cacheKey, payload, AI_LABEL_TTL);
+    return res.status(200).json(payload);
+  } catch (error) {
+    console.error('Error getGuestLabelForAi:', error);
+    return res.status(500).json({ message: error.message });
+  }
+};
+
+exports.getHotelGuestRoomStatsForAi = async (req, res) => {
+  try {
+    if (!isAiAuthorized(req)) {
+      return res.status(401).json({ message: 'Unauthorized' });
+    }
+
+    const { hotelId, period } = req.query;
+    if (!hotelId) {
+      return res.status(400).json({ message: 'Missing hotelId' });
+    }
+    const payload = await computeHotelGuestRoomStats(hotelId, period);
+    return res.status(200).json(payload);
+  } catch (error) {
+    console.error('Error getHotelGuestRoomStatsForAi:', error);
+    return res.status(500).json({ message: error.message });
+  }
+};
 
 // Lấy danh sách khách - với phân quyền
 exports.getGuests = async (req, res) => {

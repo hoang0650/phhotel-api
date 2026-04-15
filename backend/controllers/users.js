@@ -8,7 +8,20 @@ const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
 const { sendForgotPasswordEmail } = require('../config/emailServices');
 const { sendEmailTemplate, sendEmail: sendEmailAdapter, EMAIL_PROVIDER } = require('../config/emailServiceAdapter');
+const redis = require('../config/redis');
+const { getCache, setCache, deleteCachePattern, generateCacheKey } = require('../config/cacheHelper');
 dotenv.config()
+
+const AUTH_SESSION_TTL = 30 * 24 * 60 * 60; // 30 days
+const AUTH_PROFILE_TTL = 60 * 60; // 1 hour
+
+function toSafeUser(userLike) {
+    if (!userLike) return null;
+    const user = typeof userLike.toObject === 'function' ? userLike.toObject() : { ...userLike };
+    delete user.password;
+    delete user.twoFactorSecret;
+    return user;
+}
 
 async function getUserInfo(req, res) {
     try {
@@ -19,8 +32,20 @@ async function getUserInfo(req, res) {
                 message: 'Không tìm thấy thông tin user'
             });
         }
-        
-        res.json(user);
+        const userId = user.userId || user._id;
+        if (userId) {
+            const cacheKey = generateCacheKey('auth:user', String(userId));
+            const cachedUser = await getCache(cacheKey);
+            if (cachedUser) {
+                return res.json(cachedUser);
+            }
+        }
+
+        const safeUser = toSafeUser(user);
+        if (userId && safeUser) {
+            await setCache(generateCacheKey('auth:user', String(userId)), safeUser, AUTH_PROFILE_TTL);
+        }
+        res.json(safeUser || user);
     } catch (error) {
         console.error('Unexpected error in getUserInfo:', error);
         return res.status(500).json({
@@ -324,9 +349,25 @@ async function login(req, res) {
         user.lastLoginIp = clientIp;
         await user.save();
         
-        const userToReturn = user.toObject();
-        delete userToReturn.password;
-        delete userToReturn.twoFactorSecret;
+        const userToReturn = toSafeUser(user);
+
+        // Cache phiên đăng nhập + thông tin user để giảm truy vấn DB lặp lại
+        const sessionCacheKey = generateCacheKey('auth:session', String(user._id));
+        const profileCacheKey = generateCacheKey('auth:user', String(user._id));
+        await Promise.all([
+            setCache(sessionCacheKey, {
+                userId: String(user._id),
+                username: user.username,
+                email: user.email,
+                role: user.role,
+                status: user.status,
+                businessId: user.businessId || null,
+                hotelId: hotelId || null,
+                ip: clientIp,
+                lastLogin: new Date().toISOString()
+            }, AUTH_SESSION_TTL),
+            setCache(profileCacheKey, userToReturn, AUTH_PROFILE_TTL)
+        ]);
 
         const sameSiteEnv = (process.env.COOKIE_SAMESITE || '').toLowerCase().trim();
         let sameSitePolicy;
@@ -1452,6 +1493,26 @@ async function refreshAccessToken(req, res) {
 
 async function logout(req, res) {
     try {
+        // Thu hồi cache phiên đăng nhập (nếu có)
+        const authHeader = req.headers.authorization || '';
+        const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
+        let userId = req.user?.userId || req.user?._id;
+
+        if (!userId && token) {
+            try {
+                const decoded = jwt.verify(token, process.env.JWT_SECRET);
+                userId = decoded?.userId;
+            } catch (_) {}
+        }
+
+        if (userId) {
+            await Promise.all([
+                redis.del(generateCacheKey('auth:session', String(userId))),
+                redis.del(generateCacheKey('auth:user', String(userId)))
+            ]);
+            await deleteCachePattern(`users:*:${String(userId)}*`);
+        }
+
         const sameSiteEnv = (process.env.COOKIE_SAMESITE || '').toLowerCase().trim();
         let sameSitePolicy;
         if (sameSiteEnv === 'strict' || sameSiteEnv === 'lax') {

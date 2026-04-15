@@ -11,6 +11,33 @@ router.get(
   guestsController.getGuests
 );
 
+router.get(
+  '/ai/label',
+  guestsController.getGuestLabelForAi
+);
+
+router.post(
+  '/ai/match-face',
+  guestsController.matchFaceEncodingForAi
+);
+
+router.get(
+  '/ai/stats',
+  guestsController.getHotelGuestRoomStatsForAi
+);
+
+router.get(
+  '/ai/camera-dashboard',
+  guestsController.getHotelGuestRoomStatsForAi
+);
+
+router.get(
+  '/camera-dashboard',
+  authenticateToken,
+  authorizeRoles(['superadmin', 'admin', 'business', 'hotel', 'staff']),
+  guestsController.getHotelGuestRoomStatsForDashboard
+);
+
 // Lấy thông tin khách theo ID
 router.get(
   '/:id',

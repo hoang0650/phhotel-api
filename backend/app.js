@@ -36,6 +36,7 @@ var sessionsRouter = require('./routes/sessions');
 var contactRouter = require('./routes/contact');
 var einvoiceRouter = require('./routes/einvoice');
 var guestsRouter = require('./routes/guests');
+var camerasRouter = require('./routes/cameras');
 const swaggerConfig = require('./swagger/swagger');
 const jwt =require('jsonwebtoken')
 const cors = require('cors');
@@ -162,6 +163,7 @@ app.use('/files', filesRouter);
 app.use('/contacts', contactRouter);
 app.use('/e-invoice', einvoiceRouter);
 app.use('/guests', guestsRouter);
+app.use('/cameras', camerasRouter);
 app.use('/sessions', sessionsRouter);
 const { authenticateToken } = require('./middlewares/auth');
 app.use('/api/settings', authenticateToken, settingsRouter);

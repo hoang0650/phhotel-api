@@ -1,4 +1,13 @@
 const mongoose = require('mongoose');
+const { getCache, setCache, generateCacheKey } = require('../config/cacheHelper');
+
+const ROOM_EVENT_CACHE_TTL = 5 * 60; // 5 phút
+
+function getRoomKeyPart(value) {
+  if (!value) return '';
+  if (typeof value === 'string') return value;
+  return String(value);
+}
 
 const roomEventSchema = new mongoose.Schema({
   roomId: {
@@ -78,6 +87,70 @@ roomEventSchema.pre('save', function(next) {
   this.updatedAt = Date.now();
   next();
 });
+
+// Cache nhanh snapshot phòng và thông tin tính tiền gần nhất theo phòng
+roomEventSchema.post('save', async function(doc) {
+  try {
+    const hotelId = getRoomKeyPart(doc.hotelId);
+    const roomId = getRoomKeyPart(doc.roomId);
+    if (!hotelId || !roomId) return;
+
+    const latestEventKey = generateCacheKey('room:event:latest', hotelId, roomId);
+    const billingKey = generateCacheKey('room:billing:latest', hotelId, roomId);
+
+    await setCache(latestEventKey, doc.toObject(), ROOM_EVENT_CACHE_TTL);
+    await setCache(billingKey, {
+      roomId,
+      hotelId,
+      totalAmount: doc.totalAmount || 0,
+      payment: doc.payment || 0,
+      additionalCharges: doc.additionalCharges || 0,
+      discount: doc.discount || 0,
+      advancePayment: doc.advancePayment || 0,
+      paymentStatus: doc.paymentStatus || 'paid',
+      paymentMethod: doc.paymentMethod || null,
+      updatedAt: new Date().toISOString()
+    }, ROOM_EVENT_CACHE_TTL);
+  } catch (err) {
+    console.error('RoomEvent cache save error:', err.message);
+  }
+});
+
+roomEventSchema.statics.getLatestRoomEventCached = async function(hotelId, roomId) {
+  const key = generateCacheKey('room:event:latest', getRoomKeyPart(hotelId), getRoomKeyPart(roomId));
+  const cached = await getCache(key);
+  if (cached) return cached;
+
+  const latest = await this.findOne({ hotelId, roomId }).sort({ createdAt: -1 }).lean();
+  if (latest) {
+    await setCache(key, latest, ROOM_EVENT_CACHE_TTL);
+  }
+  return latest;
+};
+
+roomEventSchema.statics.getRoomBillingSummaryCached = async function(hotelId, roomId) {
+  const key = generateCacheKey('room:billing:latest', getRoomKeyPart(hotelId), getRoomKeyPart(roomId));
+  const cached = await getCache(key);
+  if (cached) return cached;
+
+  const latest = await this.findOne({ hotelId, roomId }).sort({ createdAt: -1 }).lean();
+  if (!latest) return null;
+
+  const summary = {
+    roomId: getRoomKeyPart(roomId),
+    hotelId: getRoomKeyPart(hotelId),
+    totalAmount: latest.totalAmount || 0,
+    payment: latest.payment || 0,
+    additionalCharges: latest.additionalCharges || 0,
+    discount: latest.discount || 0,
+    advancePayment: latest.advancePayment || 0,
+    paymentStatus: latest.paymentStatus || 'paid',
+    paymentMethod: latest.paymentMethod || null,
+    updatedAt: new Date().toISOString()
+  };
+  await setCache(key, summary, ROOM_EVENT_CACHE_TTL);
+  return summary;
+};
 
 const RoomEvent = mongoose.model('RoomEvent', roomEventSchema);
 
