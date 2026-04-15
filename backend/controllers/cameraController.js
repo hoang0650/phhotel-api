@@ -2,6 +2,7 @@ const { Camera } = require('../models/camera');
 const { Guest } = require('../models/guests'); // Import model Guest từ file guests.js của bạn
 const axios = require('axios');
 const guestsController = require('./guestsController');
+const { spawn } = require('child_process');
 
 // 1. Lưu cấu hình camera mới
 exports.saveCameraConfig = async (req, res) => {
@@ -14,6 +15,7 @@ exports.saveCameraConfig = async (req, res) => {
             port,
             username,
             password,
+            rtspPath,
             aiConfig,
             status
         } = req.body || {};
@@ -30,6 +32,7 @@ exports.saveCameraConfig = async (req, res) => {
             port,
             username,
             password,
+            rtspPath,
             aiConfig,
             status
         });
@@ -63,6 +66,67 @@ exports.getActiveCamera = async (req, res) => {
         res.status(200).json({ data: camera || null });
     } catch (error) {
         res.status(500).json({ message: 'Lỗi server', error: error.message });
+    }
+};
+
+function buildRtspUrl(camera) {
+    const username = camera.username || '';
+    const password = camera.password || '';
+    const ipAddress = camera.ipAddress || '';
+    const port = camera.port || 554;
+    const path = camera.rtspPath || '/Streaming/Channels/101';
+    const normalizedPath = path.startsWith('/') ? path : `/${path}`;
+    return `rtsp://${encodeURIComponent(username)}:${encodeURIComponent(password)}@${ipAddress}:${port}${normalizedPath}`;
+}
+
+exports.getCameraSnapshot = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const camera = await Camera.findById(id).lean();
+        if (!camera) {
+            return res.status(404).json({ message: 'Không tìm thấy camera' });
+        }
+
+        const rtspUrl = buildRtspUrl(camera);
+        const args = [
+            '-rtsp_transport', 'tcp',
+            '-i', rtspUrl,
+            '-frames:v', '1',
+            '-f', 'image2',
+            '-vcodec', 'mjpeg',
+            'pipe:1'
+        ];
+
+        const ffmpeg = spawn('ffmpeg', args, { stdio: ['ignore', 'pipe', 'pipe'] });
+
+        const chunks = [];
+        const errChunks = [];
+
+        const killTimer = setTimeout(() => {
+            try { ffmpeg.kill('SIGKILL'); } catch (_) {}
+        }, 8000);
+
+        ffmpeg.stdout.on('data', (d) => chunks.push(d));
+        ffmpeg.stderr.on('data', (d) => errChunks.push(d));
+
+        ffmpeg.on('error', (err) => {
+            clearTimeout(killTimer);
+            return res.status(500).json({ message: 'Không thể chạy ffmpeg để lấy snapshot', error: err.message });
+        });
+
+        ffmpeg.on('close', (code) => {
+            clearTimeout(killTimer);
+            if (code !== 0 || chunks.length === 0) {
+                const errText = Buffer.concat(errChunks).toString('utf8');
+                return res.status(500).json({ message: 'Lấy snapshot thất bại. Kiểm tra RTSP URL/rtspPath hoặc camera online.', details: errText.slice(-1200) });
+            }
+            const img = Buffer.concat(chunks);
+            res.setHeader('Content-Type', 'image/jpeg');
+            res.setHeader('Cache-Control', 'no-store');
+            return res.status(200).send(img);
+        });
+    } catch (error) {
+        return res.status(500).json({ message: 'Lỗi server', error: error.message });
     }
 };
 

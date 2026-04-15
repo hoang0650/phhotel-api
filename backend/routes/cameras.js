@@ -17,6 +17,13 @@ router.get(
   cameraController.getActiveCamera
 );
 
+router.get(
+  '/:id/snapshot',
+  authenticateToken,
+  authorizeRoles(['superadmin', 'admin', 'business', 'hotel', 'staff']),
+  cameraController.getCameraSnapshot
+);
+
 router.post(
   '/',
   authenticateToken,

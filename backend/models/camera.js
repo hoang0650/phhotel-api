@@ -17,6 +17,7 @@ const cameraSchema = new Schema({
   port: { type: Number, default: 554 }, // Port RTSP
   username: { type: String, required: true },
   password: { type: String, required: true },
+  rtspPath: { type: String, default: '/Streaming/Channels/101' },
   
   // Cấu hình AI tích hợp
   aiConfig: {
