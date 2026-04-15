@@ -79,12 +79,48 @@ function buildRtspUrl(camera) {
     return `rtsp://${encodeURIComponent(username)}:${encodeURIComponent(password)}@${ipAddress}:${port}${normalizedPath}`;
 }
 
+function maskRtspUrl(rtspUrl) {
+    if (!rtspUrl) return '';
+    try {
+        const u = new URL(rtspUrl);
+        if (u.password) {
+            u.password = '***';
+        }
+        return u.toString();
+    } catch (_) {
+        return rtspUrl.replace(/:(?:[^:@/]+)@/, ':***@');
+    }
+}
+
+function isPrivateIpv4(ip) {
+    if (!ip) return false;
+    const parts = String(ip).trim().split('.');
+    if (parts.length !== 4) return false;
+    const nums = parts.map(p => Number(p));
+    if (nums.some(n => Number.isNaN(n) || n < 0 || n > 255)) return false;
+    const [a, b] = nums;
+    if (a === 10) return true;
+    if (a === 127) return true;
+    if (a === 192 && b === 168) return true;
+    if (a === 172 && b >= 16 && b <= 31) return true;
+    return false;
+}
+
 exports.getCameraSnapshot = async (req, res) => {
     try {
         const { id } = req.params;
         const camera = await Camera.findById(id).lean();
         if (!camera) {
             return res.status(404).json({ message: 'Không tìm thấy camera' });
+        }
+
+        if (isPrivateIpv4(camera.ipAddress) && process.env.NODE_ENV === 'production') {
+            return res.status(400).json({
+                message: 'Không thể lấy snapshot: camera đang dùng IP nội bộ (LAN) nên server cloud không truy cập được.',
+                hint: 'Cần NAT/port-forward/VPN hoặc triển khai backend/agent cùng mạng với camera.',
+                ipAddress: camera.ipAddress,
+                rtspPath: camera.rtspPath || null
+            });
         }
 
         const rtspUrl = buildRtspUrl(camera);
@@ -111,14 +147,29 @@ exports.getCameraSnapshot = async (req, res) => {
 
         ffmpeg.on('error', (err) => {
             clearTimeout(killTimer);
-            return res.status(500).json({ message: 'Không thể chạy ffmpeg để lấy snapshot', error: err.message });
+            const isMissing = err && (err.code === 'ENOENT' || String(err.message || '').toLowerCase().includes('spawn ffmpeg'));
+            return res.status(500).json({
+                message: isMissing ? 'Server chưa cài ffmpeg nên không thể lấy snapshot.' : 'Không thể chạy ffmpeg để lấy snapshot.',
+                error: err.message,
+                rtsp: maskRtspUrl(rtspUrl),
+                ipAddress: camera.ipAddress,
+                port: camera.port || 554,
+                rtspPath: camera.rtspPath || null
+            });
         });
 
         ffmpeg.on('close', (code) => {
             clearTimeout(killTimer);
             if (code !== 0 || chunks.length === 0) {
                 const errText = Buffer.concat(errChunks).toString('utf8');
-                return res.status(500).json({ message: 'Lấy snapshot thất bại. Kiểm tra RTSP URL/rtspPath hoặc camera online.', details: errText.slice(-1200) });
+                return res.status(500).json({
+                    message: 'Lấy snapshot thất bại. Kiểm tra rtspPath / user-pass / camera online / mạng từ server tới camera.',
+                    details: errText.slice(-1200),
+                    rtsp: maskRtspUrl(rtspUrl),
+                    ipAddress: camera.ipAddress,
+                    port: camera.port || 554,
+                    rtspPath: camera.rtspPath || null
+                });
             }
             const img = Buffer.concat(chunks);
             res.setHeader('Content-Type', 'image/jpeg');
