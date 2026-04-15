@@ -18,6 +18,9 @@ const cameraSchema = new Schema({
   username: { type: String, required: true },
   password: { type: String, required: true },
   rtspPath: { type: String, default: '/Streaming/Channels/101' },
+  accessMode: { type: String, enum: ['cloud', 'agent'], default: 'cloud' },
+  agentBaseUrl: { type: String, default: '' },
+  agentToken: { type: String, default: '' },
   
   // Cấu hình AI tích hợp
   aiConfig: {
