@@ -140,15 +140,34 @@ exports.checkAgentHealth = async (req, res) => {
         }
         const healthUrl = /\/health$/i.test(baseUrl) ? baseUrl : `${baseUrl}/health`;
         const resp = await axios.get(healthUrl, { headers, timeout: 8000 });
-        return res.status(200).json({ ok: !!resp?.data?.ok, data: resp?.data || null });
+        const data = resp?.data ?? null;
+        let ok = false;
+        if (data && typeof data === 'object') {
+            ok = !!data.ok;
+        } else if (typeof data === 'string') {
+            ok = /\bok\b/i.test(data);
+        }
+        return res.status(200).json({
+            ok,
+            message: ok ? 'OK' : 'Agent trả phản hồi không hợp lệ',
+            status: resp?.status || 200,
+            url: healthUrl,
+            data
+        });
     } catch (error) {
         const status = error?.response?.status || 500;
         const data = error?.response?.data || null;
+        let dataPreview = null;
+        if (typeof data === 'string') {
+            dataPreview = data.slice(0, 400);
+        } else if (data && typeof data === 'object') {
+            dataPreview = data;
+        }
         return res.status(200).json({
             ok: false,
             message: 'Agent health check failed',
             status,
-            data
+            data: dataPreview
         });
     }
 };
