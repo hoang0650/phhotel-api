@@ -10,6 +10,7 @@ const { Hotel } = require('../models/hotel');
 const RoomEvent = require('../models/roomEvent');
 const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
+const { deleteCachePattern } = require('../config/cacheHelper');
 
 const mapPaymentMethod = (method) => {
     const m = (method || 'cash').toLowerCase();
@@ -455,6 +456,11 @@ exports.createShiftHandover = async (req, res) => {
                 );
             }
         }
+
+        await Promise.all([
+            deleteCachePattern(`transactions:income:${hotelId}:*`),
+            deleteCachePattern(`transactions:expense:${hotelId}:*`)
+        ]);
 
         // Xóa lịch sử phòng đã được lưu vào shift handover
         if (roomHistory && roomHistory.length > 0) {
@@ -974,6 +980,11 @@ exports.createManagerHandover = async (req, res) => {
                 );
             }
         }
+
+        await Promise.all([
+            deleteCachePattern(`transactions:income:${hotelId}:*`),
+            deleteCachePattern(`transactions:expense:${hotelId}:*`)
+        ]);
 
         // Xóa lịch sử phòng đã được lưu vào shift handover
         if (roomHistory && roomHistory.length > 0) {

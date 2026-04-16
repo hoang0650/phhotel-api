@@ -1,5 +1,25 @@
 const { Transaction } = require('../models/transactions');
 const mongoose = require('mongoose');
+const { getCache, setCache, deleteCachePattern, generateCacheKey } = require('../config/cacheHelper');
+
+const TRANSACTION_LIST_TTL = 30;
+
+function normalizeDateParam(value) {
+    if (!value) return '';
+    try {
+        return new Date(value).toISOString();
+    } catch (_) {
+        return String(value);
+    }
+}
+
+async function invalidateTransactionCache(hotelId) {
+    if (!hotelId) return;
+    await Promise.all([
+        deleteCachePattern(`transactions:income:${hotelId}:*`),
+        deleteCachePattern(`transactions:expense:${hotelId}:*`)
+    ]);
+}
 
 /**
  * Tạo phiếu chi mới
@@ -43,6 +63,7 @@ exports.createExpense = async (req, res) => {
         });
 
         await transaction.save();
+        await invalidateTransactionCache(hotelId);
 
         res.status(201).json({
             message: 'Tạo phiếu chi thành công',
@@ -72,6 +93,19 @@ exports.getExpenses = async (req, res) => {
             });
         }
 
+        const cacheKey = generateCacheKey(
+            'transactions:expense',
+            String(hotelId),
+            normalizeDateParam(startDate),
+            normalizeDateParam(endDate),
+            String(page),
+            String(limit)
+        );
+        const cached = await getCache(cacheKey);
+        if (cached) {
+            return res.status(200).json(cached);
+        }
+
         const query = {
             hotelId: new mongoose.Types.ObjectId(hotelId),
             type: 'expense',
@@ -95,7 +129,7 @@ exports.getExpenses = async (req, res) => {
             Transaction.countDocuments(query)
         ]);
 
-        res.status(200).json({
+        const payload = {
             message: 'Lấy danh sách phiếu chi thành công',
             data: expenses,
             pagination: {
@@ -104,7 +138,9 @@ exports.getExpenses = async (req, res) => {
                 totalItems: totalCount,
                 itemsPerPage: parseInt(limit)
             }
-        });
+        };
+        await setCache(cacheKey, payload, TRANSACTION_LIST_TTL);
+        res.status(200).json(payload);
 
     } catch (error) {
         console.error('Error getting expenses:', error);
@@ -146,6 +182,7 @@ exports.deleteExpense = async (req, res) => {
         }
 
         await Transaction.findByIdAndDelete(id);
+        await invalidateTransactionCache(String(transaction.hotelId));
 
         res.status(200).json({
             message: 'Xóa phiếu chi thành công'
@@ -166,7 +203,7 @@ exports.deleteExpense = async (req, res) => {
  */
 exports.createIncome = async (req, res) => {
     try {
-        const { hotelId, amount, method, incomeCategory, description, notes, payer } = req.body;
+        const { hotelId, amount, method, incomeCategory, description, notes, payer, metadata, invoiceNumber, bookingId, staffId } = req.body;
         const userId = req.user?.userId;
 
         // Validation
@@ -192,23 +229,28 @@ exports.createIncome = async (req, res) => {
         // Tạo transaction mới
         const transaction = new Transaction({
             hotelId: new mongoose.Types.ObjectId(hotelId),
+            bookingId: bookingId && mongoose.Types.ObjectId.isValid(bookingId) ? new mongoose.Types.ObjectId(bookingId) : undefined,
+            staffId: staffId && mongoose.Types.ObjectId.isValid(staffId) ? new mongoose.Types.ObjectId(staffId) : undefined,
             type: 'income',
             amount: parseFloat(amount),
             method: method,
             incomeCategory: finalIncomeCategory,
             description: description || '',
             notes: notes || '',
+            invoiceNumber: invoiceNumber || undefined,
             status: 'completed',
             processedBy: userId ? new mongoose.Types.ObjectId(userId) : undefined,
             processedAt: new Date(),
             details: {
                 payer: payer || ''
             },
+            metadata: metadata && typeof metadata === 'object' ? metadata : undefined,
             createdAt: new Date(),
             updatedAt: new Date()
         });
 
         await transaction.save();
+        await invalidateTransactionCache(hotelId);
 
         res.status(201).json({
             message: 'Tạo phiếu thu thành công',
@@ -238,6 +280,19 @@ exports.getIncomes = async (req, res) => {
             });
         }
 
+        const cacheKey = generateCacheKey(
+            'transactions:income',
+            String(hotelId),
+            normalizeDateParam(startDate),
+            normalizeDateParam(endDate),
+            String(page),
+            String(limit)
+        );
+        const cached = await getCache(cacheKey);
+        if (cached) {
+            return res.status(200).json(cached);
+        }
+
         const query = {
             hotelId: new mongoose.Types.ObjectId(hotelId),
             type: 'income',
@@ -261,7 +316,7 @@ exports.getIncomes = async (req, res) => {
             Transaction.countDocuments(query)
         ]);
 
-        res.status(200).json({
+        const payload = {
             message: 'Lấy danh sách phiếu thu thành công',
             data: incomes,
             pagination: {
@@ -270,7 +325,9 @@ exports.getIncomes = async (req, res) => {
                 totalItems: totalCount,
                 itemsPerPage: parseInt(limit)
             }
-        });
+        };
+        await setCache(cacheKey, payload, TRANSACTION_LIST_TTL);
+        res.status(200).json(payload);
 
     } catch (error) {
         console.error('Error getting incomes:', error);
@@ -312,6 +369,7 @@ exports.deleteIncome = async (req, res) => {
         }
 
         await Transaction.findByIdAndDelete(id);
+        await invalidateTransactionCache(String(transaction.hotelId));
 
         res.status(200).json({
             message: 'Xóa phiếu thu thành công'

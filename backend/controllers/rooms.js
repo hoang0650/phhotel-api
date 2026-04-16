@@ -8,9 +8,11 @@ const { Booking } = require("../models/booking");
 const { Invoice } = require("../models/invoice");
 const { Debt } = require("../models/debt");
 const RoomEvent = require("../models/roomEvent");
+const { Transaction } = require("../models/transactions");
 const { Settings } = require("../models/settings");
 const { User } = require("../models/users");
 const mongoose = require('mongoose');
+const { deleteCachePattern } = require('../config/cacheHelper');
 
 // Helper function để tạo Date theo timezone được chỉ định
 // timezone: 'UTC+7', 'UTC+8', etc. (mặc định UTC+7)
@@ -62,6 +64,13 @@ function mapRoomPaymentMethod(method) {
   if (m === 'cash') return 'cash';
   if (m === 'card' || m === 'credit_card' || m === 'virtual_card' || m === 'visa') return 'card';
   if (m === 'bank_transfer' || m === 'transfer' || m === 'banking') return 'transfer';
+  return 'cash';
+}
+
+function mapTransactionMethodFromRoomPaymentMethod(normalizedRoomMethod) {
+  const m = (normalizedRoomMethod || 'cash').toLowerCase();
+  if (m === 'transfer' || m === 'bank_transfer') return 'bank_transfer';
+  if (m === 'card' || m === 'credit_card' || m === 'virtual_card') return 'card';
   return 'cash';
 }
 
@@ -2726,6 +2735,46 @@ async function checkoutRoom(req, res) {
       const newInvoice = new Invoice(invoiceData);
       savedInvoice = await newInvoice.save();
       console.log('Invoice saved to Invoice model:', savedInvoice._id);
+
+      // Tự tạo phiếu thu khi checkout (nếu đã thanh toán)
+      // - Không tạo khi pending (QR transfer) hoặc createDebt
+      // - Không tạo khi số tiền còn lại <= 0
+      const amountToCollect = Number(savedInvoice.remainingAmount || 0);
+      if (finalPaymentStatus === 'paid' && amountToCollect > 0) {
+        const existing = await Transaction.findOne({
+          hotelId: new mongoose.Types.ObjectId(room.hotelId),
+          type: 'income',
+          invoiceNumber: invoiceNumber,
+          'metadata.source': 'room_checkout'
+        }).lean();
+
+        if (!existing) {
+          const tx = new Transaction({
+            hotelId: new mongoose.Types.ObjectId(room.hotelId),
+            bookingId: booking?._id || undefined,
+            staffId: staffId && mongoose.Types.ObjectId.isValid(staffId) ? new mongoose.Types.ObjectId(staffId) : undefined,
+            type: 'income',
+            incomeCategory: 'room',
+            amount: amountToCollect,
+            method: mapTransactionMethodFromRoomPaymentMethod(normalizedPaymentMethod),
+            status: 'completed',
+            description: `Thu tiền phòng ${room.roomNumber} (checkout)`,
+            notes: notes || '',
+            invoiceNumber: invoiceNumber,
+            processedBy: req.user?.userId ? new mongoose.Types.ObjectId(req.user.userId) : undefined,
+            processedAt: new Date(),
+            metadata: {
+              source: 'room_checkout',
+              roomId: String(room._id),
+              bookingId: booking?._id ? String(booking._id) : null,
+              invoiceId: String(savedInvoice._id),
+              invoiceNumber: invoiceNumber
+            }
+          });
+          await tx.save();
+          await deleteCachePattern(`transactions:income:${String(room.hotelId)}:*`);
+        }
+      }
       
       // Cập nhật checkout event với invoiceId
       if (savedInvoice._id) {
