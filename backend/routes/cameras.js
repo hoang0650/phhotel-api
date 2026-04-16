@@ -25,6 +25,13 @@ router.get(
 );
 
 router.post(
+  '/agent-health',
+  authenticateToken,
+  authorizeRoles(['superadmin', 'admin', 'business', 'hotel', 'staff']),
+  cameraController.checkAgentHealth
+);
+
+router.post(
   '/',
   authenticateToken,
   authorizeRoles(['superadmin', 'admin', 'business', 'hotel', 'staff']),

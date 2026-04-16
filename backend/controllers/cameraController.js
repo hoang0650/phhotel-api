@@ -112,6 +112,47 @@ function isPrivateIpv4(ip) {
     return false;
 }
 
+function normalizeAgentBaseUrl(input) {
+    let value = String(input || '').trim();
+    if (!value) return '';
+    value = value.replace(/:+$/, '');
+    value = value.replace(/\/+$/, '');
+    if (!/^https?:\/\//i.test(value)) {
+        value = `https://${value}`;
+    }
+    return value;
+}
+
+exports.checkAgentHealth = async (req, res) => {
+    try {
+        const { agentBaseUrl, agentToken } = req.body || {};
+        const baseUrl = normalizeAgentBaseUrl(agentBaseUrl);
+        if (!baseUrl) {
+            return res.status(400).json({ ok: false, message: 'Missing agentBaseUrl' });
+        }
+        if (/api\.phgrouptechs\.com$/i.test(baseUrl)) {
+            return res.status(400).json({ ok: false, message: 'Agent URL không được trỏ vào API production.' });
+        }
+
+        const headers = {};
+        if (agentToken) {
+            headers['x-agent-token'] = agentToken;
+        }
+        const healthUrl = /\/health$/i.test(baseUrl) ? baseUrl : `${baseUrl}/health`;
+        const resp = await axios.get(healthUrl, { headers, timeout: 8000 });
+        return res.status(200).json({ ok: !!resp?.data?.ok, data: resp?.data || null });
+    } catch (error) {
+        const status = error?.response?.status || 500;
+        const data = error?.response?.data || null;
+        return res.status(200).json({
+            ok: false,
+            message: 'Agent health check failed',
+            status,
+            data
+        });
+    }
+};
+
 exports.getCameraSnapshot = async (req, res) => {
     try {
         const { id } = req.params;
