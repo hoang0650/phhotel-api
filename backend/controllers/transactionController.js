@@ -13,6 +13,17 @@ function normalizeDateParam(value) {
     }
 }
 
+function normalizeTransactionMethod(method) {
+    const m = String(method || '').toLowerCase().trim();
+    if (m === 'transfer' || m === 'banking' || m === 'bank' || m === 'qr' || m === 'vnpay') return 'bank_transfer';
+    if (m === 'credit_card' || m === 'visa' || m === 'master' || m === 'mastercard') return 'card';
+    if (m === 'virtual_card') return 'virtual_card';
+    if (m === 'card') return 'card';
+    if (m === 'bank_transfer') return 'bank_transfer';
+    if (m === 'cash') return 'cash';
+    return 'other';
+}
+
 async function invalidateTransactionCache(hotelId) {
     if (!hotelId) return;
     await Promise.all([
@@ -29,6 +40,7 @@ exports.createExpense = async (req, res) => {
     try {
         const { hotelId, amount, method, expenseCategory, description, notes, recipient } = req.body;
         const userId = req.user?.userId;
+        const normalizedMethod = normalizeTransactionMethod(method);
 
         // Validation
         if (!hotelId || !amount || !method) {
@@ -48,7 +60,7 @@ exports.createExpense = async (req, res) => {
             hotelId: new mongoose.Types.ObjectId(hotelId),
             type: 'expense',
             amount: parseFloat(amount),
-            method: method,
+            method: normalizedMethod,
             expenseCategory: expenseCategory || 'other',
             description: description || '',
             notes: notes || '',
@@ -205,6 +217,7 @@ exports.createIncome = async (req, res) => {
     try {
         const { hotelId, amount, method, incomeCategory, description, notes, payer, metadata, invoiceNumber, bookingId, staffId } = req.body;
         const userId = req.user?.userId;
+        const normalizedMethod = normalizeTransactionMethod(method);
 
         // Validation
         if (!hotelId || !amount || !method) {
@@ -233,7 +246,7 @@ exports.createIncome = async (req, res) => {
             staffId: staffId && mongoose.Types.ObjectId.isValid(staffId) ? new mongoose.Types.ObjectId(staffId) : undefined,
             type: 'income',
             amount: parseFloat(amount),
-            method: method,
+            method: normalizedMethod,
             incomeCategory: finalIncomeCategory,
             description: description || '',
             notes: notes || '',
