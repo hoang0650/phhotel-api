@@ -1246,8 +1246,7 @@ const cleanupRoomEvents = async (roomId, maxEvents = 10) => {
 
 // Helper function để lưu event vào RoomEvent collection (chỉ lưu vào RoomEvent, không lưu vào room.events nữa)
 const saveEventToBoth = async (room, eventData) => {
-  // Chỉ lưu vào RoomEvent collection
-  await saveRoomEvent(room._id, room.hotelId, eventData);
+  return await saveRoomEvent(room._id, room.hotelId, eventData);
 };
 
 // Helper function để tối ưu hóa events - giới hạn số lượng và độ dài string (cho backward compatibility)
@@ -4761,7 +4760,7 @@ async function transferRoom(req, res) {
 // Đặt phòng trước (Booking/Reservation)
 async function createRoomBooking(req, res) {
   try {
-    const { roomId, hotelId, guestInfo, checkInDate, checkOutDate, rateType, notes, advancePayment, guestEmail, guestIdNumber } = req.body;
+    const { roomId, hotelId, guestInfo, checkInDate, checkOutDate, rateType, notes, advancePayment, advancePaymentMethod, guestEmail, guestIdNumber } = req.body;
     
     // Merge guestInfo với các trường riêng lẻ nếu có
     const finalGuestInfo = {
@@ -4904,12 +4903,13 @@ async function createRoomBooking(req, res) {
       expectedCheckoutTime: checkOutDate ? new Date(checkOutDate) : null,
       rateType: rateType || 'hourly',
       advancePayment: advancePayment || 0,
+      advancePaymentMethod: advancePaymentMethod || 'cash',
       notes: notes || '',
       createdAt: new Date()
     };
     
     // Lưu event vào RoomEvent collection và room document
-    await saveEventToBoth(room, bookingEvent);
+    const savedRoomEvent = await saveEventToBoth(room, bookingEvent);
     
     // Kiểm tra xem ngày đặt có phải hôm nay hoặc đã qua không
     const todayForStatus = new Date();
@@ -4929,6 +4929,7 @@ async function createRoomBooking(req, res) {
         checkOutDate: checkOutDate ? new Date(checkOutDate) : null,
         rateType,
         advancePayment: advancePayment || 0,
+        advancePaymentMethod: advancePaymentMethod || 'cash',
         notes
       };
     } else if (room.status === 'vacant' && !isBookingTodayOrPast) {
@@ -4957,10 +4958,60 @@ async function createRoomBooking(req, res) {
       rateType,
       checkInTime: new Date(checkInDate),
       checkOutTime: checkOutDate ? new Date(checkOutDate) : null,
-      guestInfo: finalGuestInfo
+      guestInfo: finalGuestInfo,
+      advancePayment: advancePayment || 0,
+      paymentMethod: advancePaymentMethod || 'cash'
     });
     
     await room.save();
+
+    const depositAmount = Number(advancePayment || 0);
+    if (depositAmount > 0) {
+      let txMethod = String(advancePaymentMethod || 'cash').toLowerCase().trim();
+      if (txMethod === 'transfer') txMethod = 'bank_transfer';
+      if (txMethod === 'credit_card') txMethod = 'card';
+      if (!['cash', 'bank_transfer', 'card', 'credit_card', 'virtual_card', 'other'].includes(txMethod)) {
+        txMethod = 'cash';
+      }
+
+      const roomEventId = savedRoomEvent?._id ? String(savedRoomEvent._id) : null;
+      const existingTx = roomEventId
+        ? await Transaction.findOne({
+            hotelId: new mongoose.Types.ObjectId(room.hotelId),
+            type: 'income',
+            incomeCategory: 'deposit',
+            'metadata.source': 'booking_advance',
+            'metadata.roomEventId': roomEventId
+          }).lean()
+        : null;
+
+      if (!existingTx) {
+        const tx = new Transaction({
+          hotelId: new mongoose.Types.ObjectId(room.hotelId),
+          staffId: req.body.staffId && mongoose.Types.ObjectId.isValid(req.body.staffId) ? new mongoose.Types.ObjectId(req.body.staffId) : undefined,
+          type: 'income',
+          incomeCategory: 'deposit',
+          amount: depositAmount,
+          method: txMethod,
+          status: 'completed',
+          description: `[Đặt trước] Phòng ${room.roomNumber}`,
+          notes: notes || '',
+          processedBy: req.user?.userId ? new mongoose.Types.ObjectId(req.user.userId) : undefined,
+          processedAt: new Date(),
+          metadata: {
+            source: 'booking_advance',
+            roomId: String(room._id),
+            roomNumber: String(room.roomNumber || ''),
+            roomEventId: roomEventId,
+            checkInDate: checkInDate,
+            checkOutDate: checkOutDate || null,
+            guestName: finalGuestInfo?.name || null,
+          }
+        });
+        await tx.save();
+        await deleteCachePattern(`transactions:income:${String(room.hotelId)}:*`);
+      }
+    }
     
     // Tạo thông báo tự động cho booking
     const guestName = finalGuestInfo?.name || 'Khách đặt trước';
