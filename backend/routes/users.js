@@ -3,6 +3,7 @@ var router = express.Router();
 const { 
     getUserInfo, 
     createUser, 
+    createStaffUser,
     registerUser,
     login, 
     refreshAccessToken,
@@ -108,6 +109,8 @@ router.get('/', authenticateToken, authorizeRoles(['superadmin', 'admin']), getA
  */
 // Route để admin tạo user (yêu cầu authentication)
 router.post('/signup', authenticateToken, authorizeRoles(['superadmin', 'admin']), createUser);
+
+router.post('/staff/create', authenticateToken, authorizeRoles(['superadmin', 'admin', 'business', 'hotel']), createStaffUser);
 
 /**
  * @swagger

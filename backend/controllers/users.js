@@ -571,6 +571,95 @@ async function getAllUsers(req, res) {
     }
 }
 
+async function createStaffUser(req, res) {
+    try {
+        const { username, email, password, fullName, phone, hotelId } = req.body || {};
+        const currentUser = req.user;
+
+        if (!currentUser || !['superadmin', 'admin', 'business', 'hotel'].includes(currentUser.role)) {
+            return res.status(403).json({ message: 'Bạn không có quyền tạo nhân viên.' });
+        }
+
+        if (!username || !email || !password || !hotelId) {
+            return res.status(400).json({ message: 'Vui lòng điền đầy đủ username, email, password và hotelId' });
+        }
+
+        const hotel = await Hotel.findById(hotelId).lean();
+        if (!hotel) {
+            return res.status(404).json({ message: 'Không tìm thấy khách sạn' });
+        }
+
+        if (currentUser.role === 'hotel') {
+            if (!currentUser.hotelId || String(currentUser.hotelId) !== String(hotelId)) {
+                return res.status(403).json({ message: 'Bạn không có quyền tạo nhân viên cho khách sạn khác' });
+            }
+        }
+
+        if (currentUser.role === 'business') {
+            if (!currentUser.businessId || String(hotel.businessId) !== String(currentUser.businessId)) {
+                return res.status(403).json({ message: 'Bạn không có quyền tạo nhân viên cho khách sạn không thuộc doanh nghiệp của bạn' });
+            }
+        }
+
+        const existingUser = await User.findOne({ $or: [{ email }, { username }] });
+        if (existingUser) {
+            return res.status(400).json({
+                message: existingUser.email === email ? 'Email đã được sử dụng' : 'Tên đăng nhập đã được sử dụng'
+            });
+        }
+
+        const businessId = hotel.businessId ? String(hotel.businessId) : undefined;
+        if (businessId && !['superadmin', 'admin'].includes(currentUser.role)) {
+            try {
+                const businessOwner = await User.findOne({ businessId: businessId, role: 'business' }).populate('pricingPackage');
+                if (businessOwner && businessOwner.pricingPackage) {
+                    const pkg = businessOwner.pricingPackage;
+                    const maxUsers = pkg.maxUsers;
+                    if (maxUsers !== 0 && maxUsers !== null) {
+                        const staffCount = await User.countDocuments({
+                            businessId: businessId,
+                            role: 'staff',
+                            status: { $ne: 'deleted' }
+                        });
+                        if (staffCount >= maxUsers) {
+                            return res.status(403).json({
+                                message: `Đã đạt giới hạn số lượng nhân viên (${maxUsers}) cho gói đăng ký này. Vui lòng nâng cấp gói để tạo thêm nhân viên.`
+                            });
+                        }
+                    }
+                }
+            } catch (limitError) {
+                console.error('Error checking user limit:', limitError);
+            }
+        }
+
+        const hashedPassword = await bcrypt.hash(password, 8);
+
+        const newUser = new User({
+            username,
+            email,
+            password: hashedPassword,
+            fullName: fullName || '',
+            phone: phone || '',
+            role: 'staff',
+            status: 'active',
+            businessId: businessId || undefined,
+            hotelId: hotelId,
+            createdAt: Date.now()
+        });
+
+        await newUser.save();
+
+        return res.status(201).json({
+            message: 'Tạo tài khoản nhân viên thành công',
+            user: toSafeUser(newUser)
+        });
+    } catch (error) {
+        console.error('Error creating staff user:', error);
+        return res.status(500).json({ message: 'Lỗi server', error: error.message });
+    }
+}
+
 /**
  * Lấy users theo business ID
  */
@@ -1542,6 +1631,7 @@ async function logout(req, res) {
 module.exports = {
     getUserInfo,
     createUser,
+    createStaffUser,
     registerUser,
     login,
     createBusinessUser,
