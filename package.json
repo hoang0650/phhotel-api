@@ -3,9 +3,9 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "start": "node -e \"const {spawn}=require('child_process'); const path=require('path'); const backendCwd=path.join(__dirname,'backend'); const agentCwd=path.join(__dirname,'camera-agent'); const backend=spawn(process.execPath,['./bin/www'],{cwd:backendCwd,stdio:'inherit'}); const agent=spawn(process.execPath,['./server.js'],{cwd:agentCwd,stdio:'inherit'}); const shutdown=(code)=>{ try{ backend.kill('SIGTERM'); }catch(e){} try{ agent.kill('SIGTERM'); }catch(e){} process.exit(code); }; backend.on('exit',(code)=>shutdown(code??0)); agent.on('exit',(code)=>shutdown(code??0)); process.on('SIGINT',()=>shutdown(0)); process.on('SIGTERM',()=>shutdown(0));\"",
+    "start": "node -e \"const {spawn}=require('child_process'); const path=require('path'); const nodeBin=process.platform==='win32'?'node.exe':'node'; const backendCwd=path.join(__dirname,'backend'); const agentCwd=path.join(__dirname,'backend','camera-agent'); const backend=spawn(nodeBin,['./bin/www'],{cwd:backendCwd,stdio:'inherit'}); backend.on('error',(e)=>{console.error('backend spawn error:',e&&e.message||e); process.exit(1);}); const agent=spawn(nodeBin,['./server.js'],{cwd:agentCwd,stdio:'inherit'}); agent.on('error',(e)=>{console.error('camera-agent spawn error:',e&&e.message||e);}); const shutdown=(code)=>{ try{ backend.kill('SIGTERM'); }catch(e){} try{ agent.kill('SIGTERM'); }catch(e){} process.exit(code); }; backend.on('exit',(code)=>shutdown(code??0)); agent.on('exit',(code)=>console.log('camera-agent exited:',code)); process.on('SIGINT',()=>shutdown(0)); process.on('SIGTERM',()=>shutdown(0));\"",
     "start:backend": "cd backend && node ./bin/www",
-    "start:agent": "cd camera-agent && node ./server.js",
+    "start:agent": "cd backend/camera-agent && node ./server.js",
     "install": "cd backend && npm install --production=false"
   },
   "engines": {
