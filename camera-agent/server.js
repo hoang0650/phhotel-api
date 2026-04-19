@@ -1,6 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const { spawn } = require('child_process');
+const os = require('os');
 
 const AGENT_TOKEN = process.env.CAMERA_AGENT_TOKEN || '';
 const PORT = Number(process.env.PORT || 8787);
@@ -16,6 +17,25 @@ function isAuthorized(req) {
 
 app.get('/health', (_req, res) => {
   res.status(200).json({ ok: true });
+});
+
+function getLocalIpv4s() {
+  const nets = os.networkInterfaces();
+  const ips = [];
+  for (const name of Object.keys(nets)) {
+    for (const net of nets[name] || []) {
+      if (net && net.family === 'IPv4' && !net.internal && net.address) {
+        ips.push(net.address);
+      }
+    }
+  }
+  return Array.from(new Set(ips));
+}
+
+app.get('/info', (_req, res) => {
+  const ips = getLocalIpv4s();
+  const urls = [`http://localhost:${PORT}`].concat(ips.map(ip => `http://${ip}:${PORT}`));
+  res.status(200).json({ ok: true, port: PORT, urls, localIps: ips });
 });
 
 app.get('/snapshot', (req, res) => {
@@ -81,5 +101,8 @@ function handleSnapshot(rtspUrl, res) {
 }
 
 app.listen(PORT, () => {
+  const ips = getLocalIpv4s();
+  const urls = [`http://localhost:${PORT}`].concat(ips.map(ip => `http://${ip}:${PORT}`));
   console.log(`camera-agent listening on :${PORT}`);
+  console.log(`camera-agent urls: ${urls.join(' | ')}`);
 });

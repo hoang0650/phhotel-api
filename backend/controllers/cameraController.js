@@ -36,9 +36,9 @@ exports.saveCameraConfig = async (req, res) => {
             username,
             password,
             rtspPath,
-            accessMode,
-            agentBaseUrl,
-            agentToken,
+            accessMode: normalizeAccessMode(accessMode),
+            agentBaseUrl: normalizeAgentBaseUrl(agentBaseUrl),
+            agentToken: agentToken || '',
             aiConfig,
             status
         });
@@ -123,6 +123,12 @@ function normalizeAgentBaseUrl(input) {
     return value;
 }
 
+function normalizeAccessMode(input) {
+    const m = String(input || '').toLowerCase().trim();
+    if (m === 'agent' || m === 'onprem' || m === 'on-prem') return 'agent';
+    return 'cloud';
+}
+
 exports.checkAgentHealth = async (req, res) => {
     try {
         const { agentBaseUrl, agentToken } = req.body || {};
@@ -180,7 +186,7 @@ exports.getCameraSnapshot = async (req, res) => {
             return res.status(404).json({ message: 'Không tìm thấy camera' });
         }
 
-        const shouldUseAgent = camera.accessMode === 'agent';
+        const shouldUseAgent = normalizeAccessMode(camera.accessMode) === 'agent';
         if (shouldUseAgent) {
             if (!camera.agentBaseUrl) {
                 return res.status(400).json({
@@ -188,6 +194,13 @@ exports.getCameraSnapshot = async (req, res) => {
                     hint: 'Nhập agentBaseUrl (VD: https://agent.phgrouptechs.com) và thử lại.',
                     ipAddress: camera.ipAddress,
                     rtspPath: camera.rtspPath || null
+                });
+            }
+            if (/api\.phgrouptechs\.com$/i.test(String(camera.agentBaseUrl || '').trim())) {
+                return res.status(400).json({
+                    message: 'Agent URL không được trỏ vào API production.',
+                    hint: 'Hãy dùng URL tunnel/agent riêng (VD: https://xxx.trycloudflare.com).',
+                    agentBaseUrl: camera.agentBaseUrl || null
                 });
             }
 
@@ -295,6 +308,16 @@ exports.updateCameraConfig = async (req, res) => {
     try {
         const { id } = req.params;
         const payload = req.body || {};
+        if (payload.hasOwnProperty('accessMode')) {
+            payload.accessMode = normalizeAccessMode(payload.accessMode);
+        }
+        if (payload.hasOwnProperty('agentBaseUrl')) {
+            payload.agentBaseUrl = normalizeAgentBaseUrl(payload.agentBaseUrl);
+        }
+        if (payload.accessMode && normalizeAccessMode(payload.accessMode) !== 'agent') {
+            payload.agentBaseUrl = '';
+            payload.agentToken = '';
+        }
         const updated = await Camera.findByIdAndUpdate(id, payload, { new: true }).lean();
         if (!updated) {
             return res.status(404).json({ message: 'Không tìm thấy camera' });

@@ -3,6 +3,7 @@ const { Guest } = require('../models/guests');
 const { Room } = require('../models/rooms');
 const { Booking } = require('../models/booking');
 const guestsController = require('./guestsController');
+const { deleteCachePattern } = require('../config/cacheHelper');
 // const io = require('../socket'); // Dùng Socket.io để realtime
 
 exports.handleAiFaceDetection = async (req, res) => {
@@ -94,6 +95,7 @@ exports.handleAiFaceDetection = async (req, res) => {
         const shouldIncludeStats = includeStats === true || includeStats === 1 || includeStats === '1' || includeStats === 'true';
         if (shouldIncludeStats && hotelId) {
             try {
+                await deleteCachePattern(`ai:stats:${hotelId}:*`);
                 stats = await guestsController.computeHotelGuestRoomStats(hotelId, statsPeriod || 'day');
             } catch (_) {
                 stats = undefined;

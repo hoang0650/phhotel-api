@@ -100,7 +100,7 @@ async function computeHotelGuestRoomStats(hotelId, period) {
     hotelId,
     type: 'checkin',
     createdAt: { $gte: start }
-  }).select('createdAt roomId guestInfo.idNumber').lean();
+  }).select('createdAt roomId guestInfo.idNumber guestInfo.phone guestInfo.email guestInfo.name').lean();
 
   const idNumbers = Array.from(new Set(events.map(e => e?.guestInfo?.idNumber).filter(Boolean)));
   let firstCheckins = [];
@@ -137,9 +137,15 @@ async function computeHotelGuestRoomStats(hotelId, period) {
     const b = buckets.get(key);
     b.totalStays += 1;
     if (ev.roomId) b.roomsUsed.add(String(ev.roomId));
-    const idn = ev?.guestInfo?.idNumber;
+    const idn = String(ev?.guestInfo?.idNumber || '').trim();
+    const phone = String(ev?.guestInfo?.phone || '').trim();
+    const email = String(ev?.guestInfo?.email || '').trim();
+    const name = String(ev?.guestInfo?.name || '').trim();
+    const guestKey = idn || phone || email || name;
+    if (guestKey) {
+      b.uniqueGuests.add(guestKey);
+    }
     if (idn) {
-      b.uniqueGuests.add(idn);
       const firstAtMs = firstMap.get(idn);
       const evMs = new Date(ev.createdAt).getTime();
       if (firstAtMs !== undefined && firstAtMs < evMs) {
