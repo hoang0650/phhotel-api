@@ -2739,7 +2739,8 @@ async function checkoutRoom(req, res) {
       // - Không tạo khi pending (QR transfer) hoặc createDebt
       // - Không tạo khi số tiền còn lại <= 0
       const amountToCollect = Number(savedInvoice.remainingAmount || 0);
-      if (finalPaymentStatus === 'paid' && amountToCollect > 0) {
+      const skipAutoIncomeVoucher = !!req.body.skipAutoIncomeVoucher;
+      if (!skipAutoIncomeVoucher && finalPaymentStatus === 'paid' && amountToCollect > 0) {
         const existing = await Transaction.findOne({
           hotelId: new mongoose.Types.ObjectId(room.hotelId),
           type: 'income',
