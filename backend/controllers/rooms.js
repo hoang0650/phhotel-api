@@ -5468,7 +5468,7 @@ async function guestReturn(req, res) {
 async function updateRoomCheckinInfo(req, res) {
   try {
     const { id: roomId } = req.params;
-    const { guestInfo, advancePayment, rateType, additionalCharges, discount, selectedServices, advancePaymentMethod } = req.body;
+    const { guestInfo, advancePayment, rateType, additionalCharges, discount, selectedServices, advancePaymentMethod, notes } = req.body;
     
     const room = await Room.findById(roomId);
     if (!room) {
@@ -5529,6 +5529,10 @@ async function updateRoomCheckinInfo(req, res) {
             if (advancePaymentMethod !== undefined && advancePaymentMethod !== null) {
               roomEvent.advancePaymentMethod = advancePaymentMethod;
             }
+
+            if (notes !== undefined && notes !== null) {
+              roomEvent.notes = String(notes);
+            }
             
             // Cập nhật additionalCharges nếu có
             if (additionalCharges !== undefined && additionalCharges !== null) {
@@ -5544,6 +5548,10 @@ async function updateRoomCheckinInfo(req, res) {
             if (rateType !== undefined && rateType !== null) {
               roomEvent.rateType = rateType;
               console.log('Updated RoomEvent rateType to:', rateType);
+            }
+
+            if (notes !== undefined && notes !== null) {
+              roomEvent.notes = String(notes);
             }
             
             // Cập nhật selectedServices nếu có
@@ -5578,7 +5586,8 @@ async function updateRoomCheckinInfo(req, res) {
               advancePayment: roomEvent.advancePayment,
               rateType: roomEvent.rateType,
               selectedServices: roomEvent.selectedServices,
-              guestInfo: roomEvent.guestInfo
+              guestInfo: roomEvent.guestInfo,
+              notes: roomEvent.notes
             };
           } else {
             return res.status(404).json({ message: 'Không tìm thấy RoomEvent để cập nhật' });
@@ -5663,7 +5672,8 @@ async function updateRoomCheckinInfo(req, res) {
               advancePayment: roomEvent.advancePayment,
               rateType: roomEvent.rateType,
               selectedServices: roomEvent.selectedServices,
-              guestInfo: roomEvent.guestInfo
+              guestInfo: roomEvent.guestInfo,
+              notes: roomEvent.notes
             };
           } else {
             return res.status(404).json({ message: 'Không tìm thấy RoomEvent để cập nhật' });
@@ -5733,6 +5743,10 @@ async function updateRoomCheckinInfo(req, res) {
               totalPrice: service.totalPrice || (service.price || 0) * (service.quantity || 1),
               date: service.orderTime || new Date()
             }));
+          }
+
+          if (notes !== undefined && notes !== null) {
+            booking.notes = String(notes);
           }
           
           // Lưu booking mà không validate để tránh lỗi với các trường required
