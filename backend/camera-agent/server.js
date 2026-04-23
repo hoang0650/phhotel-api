@@ -61,6 +61,20 @@ function handleSnapshot(rtspUrl, res) {
     return res.status(400).json({ message: 'Missing rtspUrl' });
   }
 
+  let finished = false;
+  const finishJson = (status, payload) => {
+    if (finished || res.headersSent) return;
+    finished = true;
+    return res.status(status).json(payload);
+  };
+  const finishJpeg = (buf) => {
+    if (finished || res.headersSent) return;
+    finished = true;
+    res.setHeader('Content-Type', 'image/jpeg');
+    res.setHeader('Cache-Control', 'no-store');
+    return res.status(200).send(buf);
+  };
+
   const args = [
     '-rtsp_transport', 'tcp',
     '-i', rtspUrl,
@@ -84,19 +98,17 @@ function handleSnapshot(rtspUrl, res) {
   ffmpeg.on('error', (err) => {
     clearTimeout(killTimer);
     const isMissing = err && (err.code === 'ENOENT' || String(err.message || '').toLowerCase().includes('spawn ffmpeg'));
-    return res.status(500).json({ message: isMissing ? 'Agent chưa cài ffmpeg.' : 'Không thể chạy ffmpeg.', error: err.message });
+    return finishJson(500, { message: isMissing ? 'Agent chưa cài ffmpeg.' : 'Không thể chạy ffmpeg.', error: err.message });
   });
 
   ffmpeg.on('close', (code) => {
     clearTimeout(killTimer);
     if (code !== 0 || chunks.length === 0) {
       const errText = Buffer.concat(errChunks).toString('utf8');
-      return res.status(500).json({ message: 'Snapshot thất bại', details: errText.slice(-1200) });
+      return finishJson(500, { message: 'Snapshot thất bại', details: errText.slice(-1200) });
     }
     const img = Buffer.concat(chunks);
-    res.setHeader('Content-Type', 'image/jpeg');
-    res.setHeader('Cache-Control', 'no-store');
-    return res.status(200).send(img);
+    return finishJpeg(img);
   });
 }
 
