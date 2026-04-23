@@ -214,18 +214,48 @@ exports.getCameraSnapshot = async (req, res) => {
                 const resp = await axios.post(`${agentUrl}/snapshot`, { rtspUrl }, {
                     headers,
                     responseType: 'arraybuffer',
-                    timeout: 10000
+                    timeout: 15000
                 });
                 res.setHeader('Content-Type', 'image/jpeg');
                 res.setHeader('Cache-Control', 'no-store');
                 return res.status(200).send(Buffer.from(resp.data));
             } catch (e) {
-                const msg = e?.response?.data?.message || e?.message || 'Agent snapshot failed';
-                const details = e?.response?.data?.details || null;
+                const status = e?.response?.status || 500;
+                const raw = e?.response?.data;
+                let parsed = null;
+                let parsedText = '';
+                if (raw) {
+                    try {
+                        if (Buffer.isBuffer(raw)) {
+                            parsedText = raw.toString('utf8');
+                        } else if (raw instanceof ArrayBuffer) {
+                            parsedText = Buffer.from(raw).toString('utf8');
+                        } else if (ArrayBuffer.isView(raw)) {
+                            parsedText = Buffer.from(raw.buffer).toString('utf8');
+                        } else if (typeof raw === 'string') {
+                            parsedText = raw;
+                        } else if (typeof raw === 'object') {
+                            parsed = raw;
+                        }
+                        if (!parsed && parsedText) {
+                            try {
+                                parsed = JSON.parse(parsedText);
+                            } catch (_) {
+                                parsed = null;
+                            }
+                        }
+                    } catch (_) {
+                        parsed = null;
+                    }
+                }
+
+                const msg = parsed?.message || e?.message || 'Agent snapshot failed';
+                const details = parsed?.details || (parsedText ? parsedText.slice(-1200) : null);
+                const agentError = parsed?.error || null;
                 return res.status(500).json({
                     message: 'Lấy snapshot qua agent thất bại.',
                     hint: 'Kiểm tra agent đang chạy/đúng URL, token, và agent có truy cập được RTSP trong LAN.',
-                    error: String(msg),
+                    error: agentError ? `${String(msg)} • ${String(agentError)}` : String(msg),
                     details: details ? String(details).slice(-1200) : null,
                     agentBaseUrl: camera.agentBaseUrl || null,
                     ipAddress: camera.ipAddress,
